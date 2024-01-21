@@ -10,7 +10,8 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-
+	nReduce int
+	files   []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -20,6 +21,11 @@ type Coordinator struct {
 // the RPC argument and reply types are defined in rpc.go.
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
+	return nil
+}
+
+func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
+	reply.File = c.files[0]
 	return nil
 }
 
@@ -51,7 +57,10 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{
+		nReduce: nReduce,
+		files:   files,
+	}
 
 	// Your code here.
 
