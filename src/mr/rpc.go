@@ -11,7 +11,6 @@ import (
 
 // RPC definitions
 type GiveTaskArgs struct {
-	Pid int
 }
 
 type GiveTaskReply struct {

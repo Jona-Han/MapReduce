@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -27,23 +28,23 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	pid := os.Getpid()
 
-	// for {
-	TaskObj := RequestTask(pid)
+	for {
+		TaskObj := RequestTask()
 
-	switch TaskObj.Task {
-	case "map":
-		MapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
-		MarkTaskComplete(TaskObj.TaskId)
-	case "reduce":
+		switch TaskObj.Task {
+		case "map":
+			MapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
+			MarkTaskComplete(TaskObj.TaskId)
+		case "reduce":
+		default:
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-
-	// }
 }
 
-func RequestTask(pid int) GiveTaskReply {
-	args := GiveTaskArgs{Pid: pid}
+func RequestTask() GiveTaskReply {
+	args := GiveTaskArgs{}
 	reply := GiveTaskReply{}
 
 	ok := call("Coordinator.GiveTask", &args, &reply)
@@ -101,15 +102,8 @@ func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue, t
 }
 
 func writePartitionToFile(taskId int, index int, partition []KeyValue) {
-	// Make a temp directory
-	err := os.Mkdir("./tmp", 0700)
-	if err != nil {
-		log.Fatalf("Error making temp directory: %v", err)
-	}
-	defer os.RemoveAll("./tmp")
-
 	// Create a temporary file
-	tmpFile, err := os.CreateTemp("./tmp", fmt.Sprintf("mr-%d-%d-", taskId, index))
+	tmpFile, err := os.CreateTemp(".", fmt.Sprintf("mr-%d-%d-", taskId, index))
 	if err != nil {
 		log.Fatalf("Error creating temporary file: %v", err)
 	}

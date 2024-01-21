@@ -37,9 +37,10 @@ type TaskInfo struct {
 type Coordinator struct {
 	nReducer          int
 	isDone            bool
+	isMapDone         bool
 	tasksMu           sync.Mutex
 	taskStatus        map[int]TaskInfo
-	workerAssignments map[string]time.Time
+	workerAssignments map[int]time.Time
 
 	// mapTasks    []MapTask
 	// reduceTasks []ReduceTask
@@ -50,14 +51,20 @@ type Coordinator struct {
 func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 	c.tasksMu.Lock()
 	defer c.tasksMu.Unlock()
-
-	for id, info := range c.taskStatus {
-		if info.Status == TaskNotStarted {
-			c.AssignMapTask(reply, id, info)
-			info.Status = TaskCompleted
-			c.taskStatus[id] = info
-			return nil
+	if !c.isMapDone {
+		for id, info := range c.taskStatus {
+			if info.Status == TaskNotStarted {
+				c.AssignMapTask(reply, id, info)
+				info.Status = TaskInProgress
+				c.taskStatus[id] = info
+				c.workerAssignments[id] = time.Now()
+				return nil
+			}
 		}
+		//Map is not done but all tasks are in progress
+		reply.Task = "none"
+	} else {
+		log.Printf("Map is done. Reduce should be performed here.")
 	}
 	return nil
 }
@@ -77,12 +84,12 @@ func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply) {
 func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
 	c.tasksMu.Lock()
 	defer c.tasksMu.Unlock()
-	log.Printf("MarkTaskComplete called!\n")
 
 	if info, ok := c.taskStatus[args.TaskId]; ok {
 		info.Status = TaskCompleted
 		c.taskStatus[args.TaskId] = info
 	}
+	checkAllMapTasksComplete(c)
 	return nil
 }
 
@@ -122,8 +129,10 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReducer int) *Coordinator {
 	c := Coordinator{
-		nReducer: nReducer,
-		isDone:   false,
+		nReducer:          nReducer,
+		isDone:            false,
+		isMapDone:         false,
+		workerAssignments: make(map[int]time.Time),
 	}
 	partitionInputToTasks(files, &c)
 
@@ -142,4 +151,14 @@ func partitionInputToTasks(files []string, c *Coordinator) {
 		taskStatus[idx] = TaskInfo{Type: "map", Status: TaskNotStarted, Map: mapTask}
 	}
 	c.taskStatus = taskStatus
+}
+
+func checkAllMapTasksComplete(c *Coordinator) {
+	for _, info := range c.taskStatus {
+		if info.Type == "map" && info.Status != TaskCompleted {
+			return
+		}
+	}
+	c.isMapDone = true
+	log.Printf("All map tasks are completed.")
 }
