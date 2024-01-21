@@ -34,7 +34,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	switch TaskObj.Task {
 	case "map":
-		MapToIntermediates(pid, TaskObj.File, mapf)
+		MapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
 
 	case "reduce":
 	}
@@ -56,7 +56,7 @@ func RequestTask(pid int) GiveTaskReply {
 	return reply
 }
 
-func MapToIntermediates(pid int, fileName string, mapf func(string, string) []KeyValue) {
+func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue, taskId int, nReducer int) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", fileName)
@@ -69,15 +69,34 @@ func MapToIntermediates(pid int, fileName string, mapf func(string, string) []Ke
 
 	intermediate := mapf(fileName, string(content))
 
+	// Initialize intermediate partitions
+	partitions := make([][]KeyValue, nReducer)
+	for i := range partitions {
+		partitions[i] = make([]KeyValue, 0)
+	}
+
+	// Partition the intermediate key-value pairs
+	for _, kv := range intermediate {
+		reducerIndex := ihash(kv.Key) % nReducer
+		partitions[reducerIndex] = append(partitions[reducerIndex], kv)
+	}
+
+	// Write intermediate partitions to files
+	for i, partition := range partitions {
+		writePartitionToFile(taskId, i, partition)
+	}
+}
+
+func writePartitionToFile(taskId int, index int, partition []KeyValue) {
 	// Make a temp directory
-	err = os.Mkdir("./tmp", 0700)
+	err := os.Mkdir("./tmp", 0700)
 	if err != nil {
 		log.Fatalf("Error making temp directory: %v", err)
 	}
 	defer os.RemoveAll("./tmp")
 
 	// Create a temporary file
-	tmpFile, err := os.CreateTemp("./tmp", "mr-1")
+	tmpFile, err := os.CreateTemp("./tmp", fmt.Sprintf("mr-%d-%d-", taskId, index))
 	if err != nil {
 		log.Fatalf("Error creating temporary file: %v", err)
 	}
@@ -85,7 +104,7 @@ func MapToIntermediates(pid int, fileName string, mapf func(string, string) []Ke
 
 	// Encode and output to temporary file
 	enc := json.NewEncoder(tmpFile)
-	for _, kv := range intermediate {
+	for _, kv := range partition {
 		err := enc.Encode(&kv)
 
 		if err != nil {
@@ -100,7 +119,7 @@ func MapToIntermediates(pid int, fileName string, mapf func(string, string) []Ke
 	}
 
 	// Atomically rename the temporary file
-	newFilePath := fmt.Sprintf("../mr-%d.txt", pid)
+	newFilePath := fmt.Sprintf("../mr-%d-%d.txt", taskId, index)
 	err = os.Rename(tmpFile.Name(), newFilePath)
 	if err != nil {
 		log.Fatalf("Error renaming file: %v", err)

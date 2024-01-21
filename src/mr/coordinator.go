@@ -7,31 +7,92 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type MapTask struct {
-	fileName string
+	FileName string
 }
 
 type ReduceTask struct {
-	intermediateFiles []string
-	reducerIndex      int
+	IntermediateFiles []string
+	ReducerIndex      int
+}
+
+type TaskStatus int
+
+const (
+	TaskNotStarted TaskStatus = iota
+	TaskInProgress
+	TaskCompleted
+)
+
+type TaskInfo struct {
+	Type   string // "map" or "reduce"
+	Status TaskStatus
+	Map    MapTask
+	Reduce ReduceTask
 }
 
 type Coordinator struct {
-	nReduce     int
-	isDone      bool
-	tasksMu     sync.Mutex
-	mapTasks    []MapTask
-	reduceTasks []ReduceTask
+	nReducer          int
+	isDone            bool
+	tasksMu           sync.Mutex
+	taskStatus        map[int]TaskInfo
+	workerAssignments map[string]time.Time
+
+	// mapTasks    []MapTask
+	// reduceTasks []ReduceTask
 }
 
 // RPC handlers for the worker to call.
 
 func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
-	reply.File = c.mapTasks[0].fileName
-	reply.Task = "map"
+	c.tasksMu.Lock()
+	defer c.tasksMu.Unlock()
+
+	for id, info := range c.taskStatus {
+		if info.Status == TaskNotStarted {
+			c.AssignMapTask(reply, id, info)
+			info.Status = TaskCompleted
+			c.taskStatus[id] = info
+			return nil
+		}
+	}
 	return nil
+}
+
+// Assigns a map task to a worker
+func (c *Coordinator) AssignMapTask(reply *GiveTaskReply, id int, info TaskInfo) {
+	reply.File = info.Map.FileName
+	reply.NReducer = c.nReducer
+	reply.TaskId = id
+	reply.Task = "map"
+}
+
+// Assigns a reduce task to a worker
+func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply) {
+}
+
+func (c *Coordinator) MarkTaskCompleted(taskID int) {
+	c.tasksMu.Lock()
+	defer c.tasksMu.Unlock()
+
+	if info, ok := c.taskStatus[taskID]; ok {
+		info.Status = TaskCompleted
+		c.taskStatus[taskID] = info
+	}
+}
+
+func (c *Coordinator) GetTaskStatus(taskID int) (TaskStatus, bool) {
+	c.tasksMu.Lock()
+	defer c.tasksMu.Unlock()
+
+	info, ok := c.taskStatus[taskID]
+	if !ok {
+		return TaskInProgress, false
+	}
+	return info.Status, true
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -57,10 +118,10 @@ func (c *Coordinator) Done() bool {
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
-func MakeCoordinator(files []string, nReduce int) *Coordinator {
+func MakeCoordinator(files []string, nReducer int) *Coordinator {
 	c := Coordinator{
-		nReduce: nReduce,
-		isDone:  false,
+		nReducer: nReducer,
+		isDone:   false,
 	}
 	partitionInputToTasks(files, &c)
 
@@ -73,8 +134,10 @@ func partitionInputToTasks(files []string, c *Coordinator) {
 	defer c.tasksMu.Unlock()
 
 	// Iterate over the files and create a MapTask for each
-	for _, file := range files {
-		mapTask := MapTask{fileName: file}
-		c.mapTasks = append(c.mapTasks, mapTask)
+	taskStatus := make(map[int]TaskInfo)
+	for idx, fileName := range files {
+		mapTask := MapTask{FileName: fileName}
+		taskStatus[idx] = TaskInfo{Type: "map", Status: TaskNotStarted, Map: mapTask}
 	}
+	c.taskStatus = taskStatus
 }

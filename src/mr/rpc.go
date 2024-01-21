@@ -15,8 +15,10 @@ type GiveTaskArgs struct {
 }
 
 type GiveTaskReply struct {
-	File string
-	Task string
+	File     string
+	Task     string
+	NReducer int
+	TaskId   int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
