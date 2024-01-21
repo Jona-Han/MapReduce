@@ -74,14 +74,16 @@ func (c *Coordinator) AssignMapTask(reply *GiveTaskReply, id int, info TaskInfo)
 func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply) {
 }
 
-func (c *Coordinator) MarkTaskCompleted(taskID int) {
+func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
 	c.tasksMu.Lock()
 	defer c.tasksMu.Unlock()
+	log.Printf("MarkTaskComplete called!\n")
 
-	if info, ok := c.taskStatus[taskID]; ok {
+	if info, ok := c.taskStatus[args.TaskId]; ok {
 		info.Status = TaskCompleted
-		c.taskStatus[taskID] = info
+		c.taskStatus[args.TaskId] = info
 	}
+	return nil
 }
 
 func (c *Coordinator) GetTaskStatus(taskID int) (TaskStatus, bool) {

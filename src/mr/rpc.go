@@ -21,6 +21,13 @@ type GiveTaskReply struct {
 	TaskId   int
 }
 
+type MarkTaskCompletedArgs struct {
+	TaskId int
+}
+
+type MarkTaskCompletedReply struct {
+}
+
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
 func coordinatorSock() string {

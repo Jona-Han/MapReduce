@@ -35,7 +35,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	switch TaskObj.Task {
 	case "map":
 		MapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
-
+		MarkTaskComplete(TaskObj.TaskId)
 	case "reduce":
 	}
 
@@ -49,11 +49,24 @@ func RequestTask(pid int) GiveTaskReply {
 	ok := call("Coordinator.GiveTask", &args, &reply)
 
 	if ok {
-		fmt.Printf("reply.Y %s\n", reply.File)
+		fmt.Printf("Task reply -- Filename: %s\n", reply.File)
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Printf("RequestTask call failed!\n")
 	}
 	return reply
+}
+
+func MarkTaskComplete(taskId int) {
+	args := MarkTaskCompletedArgs{TaskId: taskId}
+	reply := MarkTaskCompletedReply{}
+
+	ok := call("Coordinator.MarkTaskCompleted", &args, &reply)
+
+	if ok {
+		fmt.Printf("MarkTaskComplete call success!\n")
+	} else {
+		fmt.Printf("MarkTaskComplete call failed!\n")
+	}
 }
 
 func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue, taskId int, nReducer int) {
