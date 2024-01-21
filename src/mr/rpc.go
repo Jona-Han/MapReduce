@@ -9,13 +9,6 @@ import (
 	"strconv"
 )
 
-type TaskType string
-
-const (
-	MapTask    TaskType = "map"
-	ReduceTask TaskType = "reduce"
-)
-
 // RPC definitions
 type GiveTaskArgs struct {
 	Pid int
@@ -23,7 +16,7 @@ type GiveTaskArgs struct {
 
 type GiveTaskReply struct {
 	File string
-	Task TaskType
+	Task string
 }
 
 // Cook up a unique-ish UNIX-domain socket name

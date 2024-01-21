@@ -6,19 +6,31 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
+type MapTask struct {
+	fileName string
+}
+
+type ReduceTask struct {
+	intermediateFiles []string
+	reducerIndex      int
+}
+
 type Coordinator struct {
-	nReduce int
-	files   []string
-	isDone  bool
+	nReduce     int
+	isDone      bool
+	tasksMu     sync.Mutex
+	mapTasks    []MapTask
+	reduceTasks []ReduceTask
 }
 
 // RPC handlers for the worker to call.
 
 func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
-	reply.File = c.files[0]
-	reply.Task = MapTask
+	reply.File = c.mapTasks[0].fileName
+	reply.Task = "map"
 	return nil
 }
 
@@ -48,12 +60,21 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		nReduce: nReduce,
-		files:   files,
 		isDone:  false,
 	}
-
-	// Your code here.
+	partitionInputToTasks(files, &c)
 
 	c.server()
 	return &c
+}
+
+func partitionInputToTasks(files []string, c *Coordinator) {
+	c.tasksMu.Lock()
+	defer c.tasksMu.Unlock()
+
+	// Iterate over the files and create a MapTask for each
+	for _, file := range files {
+		mapTask := MapTask{fileName: file}
+		c.mapTasks = append(c.mapTasks, mapTask)
+	}
 }

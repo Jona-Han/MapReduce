@@ -33,10 +33,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	TaskObj := RequestTask(pid)
 
 	switch TaskObj.Task {
-	case MapTask:
-		MapToIntermediates(TaskObj.File, mapf)
+	case "map":
+		MapToIntermediates(pid, TaskObj.File, mapf)
 
-	case ReduceTask:
+	case "reduce":
 	}
 
 	// }
@@ -56,7 +56,7 @@ func RequestTask(pid int) GiveTaskReply {
 	return reply
 }
 
-func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue) {
+func MapToIntermediates(pid int, fileName string, mapf func(string, string) []KeyValue) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", fileName)
@@ -70,14 +70,14 @@ func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue) {
 	intermediate := mapf(fileName, string(content))
 
 	// Make a temp directory
-	err = os.Mkdir("../../tmp", 0700)
+	err = os.Mkdir("./tmp", 0700)
 	if err != nil {
 		log.Fatalf("Error making temp directory: %v", err)
 	}
-	defer os.RemoveAll("../../tmp/")
+	defer os.RemoveAll("./tmp")
 
 	// Create a temporary file
-	tmpFile, err := os.CreateTemp("../../tmp", "mr-1")
+	tmpFile, err := os.CreateTemp("./tmp", "mr-1")
 	if err != nil {
 		log.Fatalf("Error creating temporary file: %v", err)
 	}
@@ -100,7 +100,7 @@ func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue) {
 	}
 
 	// Atomically rename the temporary file
-	newFilePath := "../mr-1.txt"
+	newFilePath := fmt.Sprintf("../mr-%d.txt", pid)
 	err = os.Rename(tmpFile.Name(), newFilePath)
 	if err != nil {
 		log.Fatalf("Error renaming file: %v", err)
