@@ -1,10 +1,13 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
+	"os"
 )
 
 // Map functions return a slice of KeyValue.
@@ -24,16 +27,23 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	pid := os.Getpid()
 
-	// Your worker implementation here.
+	// for {
+	TaskObj := RequestTask(pid)
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-	CallGiveTask()
+	switch TaskObj.Task {
+	case MapTask:
+		MapToIntermediates(TaskObj.File, mapf)
+
+	case ReduceTask:
+	}
+
+	// }
 }
 
-func CallGiveTask() {
-	args := GiveTaskArgs{}
+func RequestTask(pid int) GiveTaskReply {
+	args := GiveTaskArgs{Pid: pid}
 	reply := GiveTaskReply{}
 
 	ok := call("Coordinator.GiveTask", &args, &reply)
@@ -43,32 +53,57 @@ func CallGiveTask() {
 	} else {
 		fmt.Printf("call failed!\n")
 	}
+	return reply
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
+func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalf("cannot open %v", fileName)
+	}
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", fileName)
+	}
+	file.Close()
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+	intermediate := mapf(fileName, string(content))
 
-	// fill in the argument(s).
-	args.X = 99
+	// Make a temp directory
+	err = os.Mkdir("../../tmp", 0700)
+	if err != nil {
+		log.Fatalf("Error making temp directory: %v", err)
+	}
+	defer os.RemoveAll("../../tmp/")
 
-	// declare a reply structure.
-	reply := ExampleReply{}
+	// Create a temporary file
+	tmpFile, err := os.CreateTemp("../../tmp", "mr-1")
+	if err != nil {
+		log.Fatalf("Error creating temporary file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
 
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+	// Encode and output to temporary file
+	enc := json.NewEncoder(tmpFile)
+	for _, kv := range intermediate {
+		err := enc.Encode(&kv)
+
+		if err != nil {
+			log.Fatalf("Error encoding KeyValue to JSON: %v", err)
+		}
+	}
+
+	// Close the temporary file
+	err = tmpFile.Close()
+	if err != nil {
+		log.Fatalf("Error closing temporary file: %v", err)
+	}
+
+	// Atomically rename the temporary file
+	newFilePath := "../mr-1.txt"
+	err = os.Rename(tmpFile.Name(), newFilePath)
+	if err != nil {
+		log.Fatalf("Error renaming file: %v", err)
 	}
 }
 
