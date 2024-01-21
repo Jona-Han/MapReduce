@@ -36,6 +36,7 @@ type TaskInfo struct {
 
 type Coordinator struct {
 	nReducer          int
+	nFiles            int
 	isDone            bool
 	isMapDone         bool
 	tasksMu           sync.Mutex
@@ -53,7 +54,7 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 	defer c.tasksMu.Unlock()
 	if !c.isMapDone {
 		for id, info := range c.taskStatus {
-			if info.Status == TaskNotStarted {
+			if info.Status == TaskNotStarted && info.Type == "map" {
 				c.AssignMapTask(reply, id, info)
 				info.Status = TaskInProgress
 				c.taskStatus[id] = info
@@ -64,7 +65,15 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 		//Map is not done but all tasks are in progress
 		reply.Task = "none"
 	} else {
-		log.Printf("Map is done. Reduce should be performed here.")
+		for id, info := range c.taskStatus {
+			if info.Status == TaskNotStarted && info.Type == "reduce" {
+				c.AssignReduceTask(reply, id, info)
+				info.Status = TaskInProgress
+				c.taskStatus[id] = info
+				c.workerAssignments[id] = time.Now()
+				return nil
+			}
+		}
 	}
 	return nil
 }
@@ -73,12 +82,18 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 func (c *Coordinator) AssignMapTask(reply *GiveTaskReply, id int, info TaskInfo) {
 	reply.File = info.Map.FileName
 	reply.NReducer = c.nReducer
+	reply.NFiles = c.nFiles
 	reply.TaskId = id
 	reply.Task = "map"
 }
 
 // Assigns a reduce task to a worker
-func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply) {
+func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply, id int, info TaskInfo) {
+	reply.File = info.Map.FileName
+	reply.NReducer = c.nReducer
+	reply.NFiles = c.nFiles
+	reply.TaskId = id
+	reply.Task = "reduce"
 }
 
 func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
@@ -134,6 +149,9 @@ func MakeCoordinator(files []string, nReducer int) *Coordinator {
 		isMapDone:         false,
 		workerAssignments: make(map[int]time.Time),
 	}
+	c.tasksMu.Lock()
+	defer c.tasksMu.Unlock()
+
 	partitionInputToTasks(files, &c)
 
 	c.server()
@@ -141,9 +159,6 @@ func MakeCoordinator(files []string, nReducer int) *Coordinator {
 }
 
 func partitionInputToTasks(files []string, c *Coordinator) {
-	c.tasksMu.Lock()
-	defer c.tasksMu.Unlock()
-
 	// Iterate over the files and create a MapTask for each
 	taskStatus := make(map[int]TaskInfo)
 	for idx, fileName := range files {
@@ -151,6 +166,7 @@ func partitionInputToTasks(files []string, c *Coordinator) {
 		taskStatus[idx] = TaskInfo{Type: "map", Status: TaskNotStarted, Map: mapTask}
 	}
 	c.taskStatus = taskStatus
+	c.nFiles = len(taskStatus)
 }
 
 func checkAllMapTasksComplete(c *Coordinator) {

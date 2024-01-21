@@ -17,6 +17,7 @@ type GiveTaskReply struct {
 	File     string
 	Task     string
 	NReducer int
+	NFiles   int
 	TaskId   int
 }
 
