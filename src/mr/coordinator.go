@@ -23,13 +23,15 @@ type TaskStatus int
 
 const (
 	TaskNotStarted TaskStatus = iota
+	TaskQueued
 	TaskInProgress
 	TaskCompleted
 )
 
 type TaskInfo struct {
-	Type   string // "map" or "reduce"
+	TaskId int
 	Status TaskStatus
+	Type   string // "map" or "reduce"
 	Map    MapTask
 	Reduce ReduceTask
 }
@@ -37,44 +39,65 @@ type TaskInfo struct {
 type Coordinator struct {
 	nReducer          int
 	nFiles            int
-	isDone            bool
-	isMapDone         bool
-	tasksMu           sync.Mutex
-	taskStatus        map[int]TaskInfo
+	reduceIsDone      bool
+	mapIsDone         bool
+	tasksMx           sync.Mutex
+	allTasks          map[int]TaskInfo
 	workerAssignments map[int]time.Time
-
-	// mapTasks    []MapTask
-	// reduceTasks []ReduceTask
 }
+
+var taskAvailableChan = make(chan TaskInfo, 2)
 
 // RPC handlers for the worker to call.
 
+// func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
+// 	c.tasksMx.Lock()
+// 	defer c.tasksMx.Unlock()
+// 	if !c.mapIsDone {
+// 		for id, info := range c.allTasks {
+// 			if info.Status == TaskNotStarted && info.Type == "map" {
+// 				c.AssignMapTask(reply, id, info)
+// 				info.Status = TaskInProgress
+// 				c.allTasks[id] = info
+// 				c.workerAssignments[id] = time.Now()
+// 				return nil
+// 			}
+// 		}
+// 		//Map is not done but all tasks are in progress
+// 		reply.Task = "none"
+// 	} else {
+// 		for id, info := range c.allTasks {
+// 			if info.Status == TaskNotStarted && info.Type == "reduce" {
+// 				c.AssignReduceTask(reply, id, info)
+// 				info.Status = TaskInProgress
+// 				c.allTasks[id] = info
+// 				c.workerAssignments[id] = time.Now()
+// 				return nil
+// 			}
+// 		}
+// 	}
+// 	return nil
+// }
+
 func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
-	c.tasksMu.Lock()
-	defer c.tasksMu.Unlock()
-	if !c.isMapDone {
-		for id, info := range c.taskStatus {
-			if info.Status == TaskNotStarted && info.Type == "map" {
-				c.AssignMapTask(reply, id, info)
-				info.Status = TaskInProgress
-				c.taskStatus[id] = info
-				c.workerAssignments[id] = time.Now()
-				return nil
-			}
-		}
-		//Map is not done but all tasks are in progress
-		reply.Task = "none"
-	} else {
-		for id, info := range c.taskStatus {
-			if info.Status == TaskNotStarted && info.Type == "reduce" {
-				c.AssignReduceTask(reply, id, info)
-				info.Status = TaskInProgress
-				c.taskStatus[id] = info
-				c.workerAssignments[id] = time.Now()
-				return nil
-			}
-		}
+	taskInfo := <-taskAvailableChan
+
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
+
+	id := taskInfo.TaskId
+
+	switch taskInfo.Type {
+	case "map":
+		c.AssignMapTask(reply, taskInfo.TaskId, taskInfo)
+	case "reduce":
+		c.AssignReduceTask(reply, id, taskInfo)
 	}
+
+	taskInfo.Status = TaskInProgress
+	c.allTasks[id] = taskInfo
+	c.workerAssignments[id] = time.Now()
+
 	return nil
 }
 
@@ -97,22 +120,22 @@ func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply, id int, info TaskIn
 }
 
 func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
-	c.tasksMu.Lock()
-	defer c.tasksMu.Unlock()
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
 
-	if info, ok := c.taskStatus[args.TaskId]; ok {
+	if info, ok := c.allTasks[args.TaskId]; ok {
 		info.Status = TaskCompleted
-		c.taskStatus[args.TaskId] = info
+		c.allTasks[args.TaskId] = info
 	}
 	checkAllMapTasksComplete(c)
 	return nil
 }
 
 func (c *Coordinator) GetTaskStatus(taskID int) (TaskStatus, bool) {
-	c.tasksMu.Lock()
-	defer c.tasksMu.Unlock()
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
 
-	info, ok := c.taskStatus[taskID]
+	info, ok := c.allTasks[taskID]
 	if !ok {
 		return TaskInProgress, false
 	}
@@ -136,7 +159,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	return c.isDone
+	return c.reduceIsDone
 }
 
 // create a Coordinator.
@@ -145,36 +168,75 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReducer int) *Coordinator {
 	c := Coordinator{
 		nReducer:          nReducer,
-		isDone:            false,
-		isMapDone:         false,
+		reduceIsDone:      false,
+		mapIsDone:         false,
 		workerAssignments: make(map[int]time.Time),
 	}
-	c.tasksMu.Lock()
-	defer c.tasksMu.Unlock()
+	c.tasksMx.Lock()
+	partitionInputToMapTasks(files, &c)
+	c.tasksMx.Unlock()
 
-	partitionInputToTasks(files, &c)
+	go c.checkAllTasksAndUpdateQueue()
+	// go c.checkForWorkerTimeout()
 
 	c.server()
 	return &c
 }
 
-func partitionInputToTasks(files []string, c *Coordinator) {
+func (c *Coordinator) checkAllTasksAndUpdateQueue() {
+	for {
+		c.tasksMx.Lock()
+		if c.mapIsDone && c.reduceIsDone {
+			defer c.tasksMx.Unlock()
+			return
+		}
+
+		for _, info := range c.allTasks {
+			if !c.mapIsDone && info.Status == TaskNotStarted && info.Type == "map" {
+				c.addTaskToQueue(info)
+			}
+			if c.mapIsDone && !c.reduceIsDone && info.Status == TaskNotStarted && info.Type == "reduce" {
+				c.addTaskToQueue(info)
+			}
+		}
+		c.tasksMx.Unlock()
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func (c *Coordinator) addTaskToQueue(info TaskInfo) {
+	// Add the task to the channel
+	select {
+	case taskAvailableChan <- info:
+		info.Status = TaskQueued
+		c.allTasks[info.TaskId] = info
+	default:
+		// Channel is full, do nothing and continue
+	}
+}
+
+func (c *Coordinator) checkForWorkerTimeout() {
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
+}
+
+func partitionInputToMapTasks(files []string, c *Coordinator) {
 	// Iterate over the files and create a MapTask for each
 	taskStatus := make(map[int]TaskInfo)
 	for idx, fileName := range files {
 		mapTask := MapTask{FileName: fileName}
-		taskStatus[idx] = TaskInfo{Type: "map", Status: TaskNotStarted, Map: mapTask}
+		taskStatus[idx] = TaskInfo{TaskId: idx, Type: "map", Status: TaskNotStarted, Map: mapTask}
 	}
-	c.taskStatus = taskStatus
+	c.allTasks = taskStatus
 	c.nFiles = len(taskStatus)
 }
 
 func checkAllMapTasksComplete(c *Coordinator) {
-	for _, info := range c.taskStatus {
+	for _, info := range c.allTasks {
 		if info.Type == "map" && info.Status != TaskCompleted {
 			return
 		}
 	}
-	c.isMapDone = true
+	c.mapIsDone = true
 	log.Printf("All map tasks are completed.")
 }

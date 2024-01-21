@@ -30,20 +30,21 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	for {
-		TaskObj := RequestTask()
+		TaskObj := requestTask()
 
 		switch TaskObj.Task {
 		case "map":
-			MapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
-			MarkTaskComplete(TaskObj.TaskId)
+			mapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
+			markTaskComplete(TaskObj.TaskId)
 		case "reduce":
+			sortAndReduce(TaskObj.NReducer, TaskObj.NFiles)
 		default:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func RequestTask() GiveTaskReply {
+func requestTask() GiveTaskReply {
 	args := GiveTaskArgs{}
 	reply := GiveTaskReply{}
 
@@ -57,7 +58,7 @@ func RequestTask() GiveTaskReply {
 	return reply
 }
 
-func MarkTaskComplete(taskId int) {
+func markTaskComplete(taskId int) {
 	args := MarkTaskCompletedArgs{TaskId: taskId}
 	reply := MarkTaskCompletedReply{}
 
@@ -70,7 +71,7 @@ func MarkTaskComplete(taskId int) {
 	}
 }
 
-func MapToIntermediates(fileName string, mapf func(string, string) []KeyValue, taskId int, nReducer int) {
+func mapToIntermediates(fileName string, mapf func(string, string) []KeyValue, taskId int, nReducer int) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", fileName)
@@ -131,6 +132,37 @@ func writePartitionToFile(taskId int, index int, partition []KeyValue) {
 	if err != nil {
 		log.Fatalf("Error renaming file: %v", err)
 	}
+}
+
+func sortAndReduce(numPartitions int, numFiles int) {
+	// sort.Sort(ByKey(intermediate))
+
+	// oname := "mr-out-0"
+	// ofile, _ := os.Create(oname)
+
+	// //
+	// // call Reduce on each distinct key in intermediate[],
+	// // and print the result to mr-out-0.
+	// //
+	// i := 0
+	// for i < len(intermediate) {
+	// 	j := i + 1
+	// 	for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+	// 		j++
+	// 	}
+	// 	values := []string{}
+	// 	for k := i; k < j; k++ {
+	// 		values = append(values, intermediate[k].Value)
+	// 	}
+	// 	output := reducef(intermediate[i].Key, values)
+
+	// 	// this is the correct format for each line of Reduce output.
+	// 	fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+	// 	i = j
+	// }
+
+	// ofile.Close()
 }
 
 // send an RPC request to the coordinator, wait for the response.
