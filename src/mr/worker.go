@@ -37,6 +37,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			mapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
 			markTaskComplete(TaskObj.TaskId)
 		case "reduce":
+			log.Printf(("REDUCE TASK ASSIGNED"))
 			sortAndReduce(TaskObj.NReducer, TaskObj.NFiles)
 		default:
 		}

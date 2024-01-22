@@ -15,8 +15,7 @@ type MapTask struct {
 }
 
 type ReduceTask struct {
-	IntermediateFiles []string
-	ReducerIndex      int
+	ReducerIndex int
 }
 
 type TaskStatus int
@@ -42,6 +41,7 @@ type Coordinator struct {
 	reduceIsDone      bool
 	mapIsDone         bool
 	tasksMx           sync.Mutex
+	reduceSignal      chan struct{}
 	allTasks          map[int]TaskInfo
 	workerAssignments map[int]time.Time
 }
@@ -89,34 +89,27 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 
 	switch taskInfo.Type {
 	case "map":
-		c.AssignMapTask(reply, taskInfo.TaskId, taskInfo)
+		c.AssignTask(reply, taskInfo.TaskId, taskInfo, "map")
 	case "reduce":
-		c.AssignReduceTask(reply, id, taskInfo)
+		c.AssignTask(reply, id, taskInfo, "reduce")
 	}
-
-	taskInfo.Status = TaskInProgress
-	c.allTasks[id] = taskInfo
-	c.workerAssignments[id] = time.Now()
 
 	return nil
 }
 
 // Assigns a map task to a worker
-func (c *Coordinator) AssignMapTask(reply *GiveTaskReply, id int, info TaskInfo) {
-	reply.File = info.Map.FileName
+func (c *Coordinator) AssignTask(reply *GiveTaskReply, id int, info TaskInfo, taskType string) {
+	if info.Type == "map" {
+		reply.File = info.Map.FileName
+	}
 	reply.NReducer = c.nReducer
 	reply.NFiles = c.nFiles
 	reply.TaskId = id
-	reply.Task = "map"
-}
+	reply.Task = taskType
 
-// Assigns a reduce task to a worker
-func (c *Coordinator) AssignReduceTask(reply *GiveTaskReply, id int, info TaskInfo) {
-	reply.File = info.Map.FileName
-	reply.NReducer = c.nReducer
-	reply.NFiles = c.nFiles
-	reply.TaskId = id
-	reply.Task = "reduce"
+	info.Status = TaskInProgress
+	c.allTasks[id] = info
+	c.workerAssignments[id] = time.Now()
 }
 
 func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
@@ -126,20 +119,15 @@ func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *Mark
 	if info, ok := c.allTasks[args.TaskId]; ok {
 		info.Status = TaskCompleted
 		c.allTasks[args.TaskId] = info
+		delete(c.workerAssignments, args.TaskId)
 	}
-	checkAllMapTasksComplete(c)
+	if !c.mapIsDone {
+		checkAllMapTasksComplete(c)
+	} else {
+		checkAllReduceTasksComplete(c)
+	}
+
 	return nil
-}
-
-func (c *Coordinator) GetTaskStatus(taskID int) (TaskStatus, bool) {
-	c.tasksMx.Lock()
-	defer c.tasksMx.Unlock()
-
-	info, ok := c.allTasks[taskID]
-	if !ok {
-		return TaskInProgress, false
-	}
-	return info.Status, true
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -159,7 +147,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	return c.reduceIsDone
+	return c.mapIsDone && c.reduceIsDone
 }
 
 // create a Coordinator.
@@ -171,12 +159,15 @@ func MakeCoordinator(files []string, nReducer int) *Coordinator {
 		reduceIsDone:      false,
 		mapIsDone:         false,
 		workerAssignments: make(map[int]time.Time),
+		reduceSignal:      make(chan struct{}),
 	}
 	c.tasksMx.Lock()
 	partitionInputToMapTasks(files, &c)
 	c.tasksMx.Unlock()
 
 	go c.checkAllTasksAndUpdateQueue()
+	go c.createReduceTasks()
+
 	// go c.checkForWorkerTimeout()
 
 	c.server()
@@ -215,6 +206,26 @@ func (c *Coordinator) addTaskToQueue(info TaskInfo) {
 	}
 }
 
+func (c *Coordinator) createReduceTasks() {
+	<-c.reduceSignal
+
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
+
+	for i := 0; i < c.nReducer; i++ {
+		reduceTask := ReduceTask{ReducerIndex: i}
+		newTaskInfo := TaskInfo{
+			TaskId: i,
+			Status: TaskNotStarted,
+			Type:   "reduce",
+			Reduce: reduceTask,
+		}
+
+		c.allTasks[i] = newTaskInfo
+	}
+	return
+}
+
 func (c *Coordinator) checkForWorkerTimeout() {
 	c.tasksMx.Lock()
 	defer c.tasksMx.Unlock()
@@ -238,5 +249,16 @@ func checkAllMapTasksComplete(c *Coordinator) {
 		}
 	}
 	c.mapIsDone = true
+	close(c.reduceSignal)
 	log.Printf("All map tasks are completed.")
+}
+
+func checkAllReduceTasksComplete(c *Coordinator) {
+	for _, info := range c.allTasks {
+		if info.Type == "reduce" && info.Status != TaskCompleted {
+			return
+		}
+	}
+	c.reduceIsDone = true
+	log.Printf("All reduce tasks are completed.")
 }
