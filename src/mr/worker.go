@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -16,6 +17,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -37,8 +46,8 @@ func Worker(mapf func(string, string) []KeyValue,
 			mapToIntermediates(TaskObj.File, mapf, TaskObj.TaskId, TaskObj.NReducer)
 			markTaskComplete(TaskObj.TaskId)
 		case "reduce":
-			log.Printf(("REDUCE TASK ASSIGNED"))
-			sortAndReduce(TaskObj.NReducer, TaskObj.NFiles)
+			sortAndReduce(TaskObj.TaskId, TaskObj.NFiles, reducef)
+			markTaskComplete(TaskObj.TaskId)
 		default:
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -52,7 +61,12 @@ func requestTask() GiveTaskReply {
 	ok := call("Coordinator.GiveTask", &args, &reply)
 
 	if ok {
-		fmt.Printf("Task reply -- Filename: %s\n", reply.File)
+		switch reply.Task {
+		case "map":
+			log.Printf("Task reply -- Map --Filename: %s\n", reply.File)
+		case "reduce":
+			log.Printf("Task reply -- Reduce --Filename: %v\n", reply.TaskId)
+		}
 	} else {
 		fmt.Printf("RequestTask call failed!\n")
 	}
@@ -65,9 +79,7 @@ func markTaskComplete(taskId int) {
 
 	ok := call("Coordinator.MarkTaskCompleted", &args, &reply)
 
-	if ok {
-		fmt.Printf("MarkTaskComplete call success!\n")
-	} else {
+	if !ok {
 		fmt.Printf("MarkTaskComplete call failed!\n")
 	}
 }
@@ -135,35 +147,78 @@ func writePartitionToFile(taskId int, index int, partition []KeyValue) {
 	}
 }
 
-func sortAndReduce(numPartitions int, numFiles int) {
-	// sort.Sort(ByKey(intermediate))
+func sortAndReduce(taskID int, numPartitions int, reducef func(string, []string) string) {
+	intermediate := readIntermediateFiles(taskID, numPartitions)
+	sortIntermediate(intermediate)
+	reduceAndWriteOutput(intermediate, taskID, reducef)
+}
 
-	// oname := "mr-out-0"
-	// ofile, _ := os.Create(oname)
+func readIntermediateFiles(taskID, numPartitions int) []KeyValue {
+	var intermediate []KeyValue
 
-	// //
-	// // call Reduce on each distinct key in intermediate[],
-	// // and print the result to mr-out-0.
-	// //
-	// i := 0
-	// for i < len(intermediate) {
-	// 	j := i + 1
-	// 	for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
-	// 		j++
-	// 	}
-	// 	values := []string{}
-	// 	for k := i; k < j; k++ {
-	// 		values = append(values, intermediate[k].Value)
-	// 	}
-	// 	output := reducef(intermediate[i].Key, values)
+	for partition := 0; partition < numPartitions; partition++ {
+		fileName := fmt.Sprintf("../mr-%d-%d.txt", partition, taskID)
+		file, err := os.Open(fileName)
+		if err != nil {
+			log.Fatalf(("Error opening intermediate file: %v"), err)
+		}
+		defer file.Close()
 
-	// 	// this is the correct format for each line of Reduce output.
-	// 	fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
+		}
+	}
 
-	// 	i = j
-	// }
+	return intermediate
+}
 
-	// ofile.Close()
+func sortIntermediate(intermediate []KeyValue) {
+	sort.Sort(ByKey(intermediate))
+}
+
+func reduceAndWriteOutput(intermediate []KeyValue, taskId int, reducef func(string, []string) string) {
+	// Create a temporary file
+	tmpFile, err := os.CreateTemp(".", fmt.Sprintf("mr-out-%d-", taskId))
+	if err != nil {
+		log.Fatalf("Error creating temporary file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(tmpFile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	// Close the temporary file
+	err = tmpFile.Close()
+	if err != nil {
+		log.Fatalf("Error closing temporary file: %v", err)
+	}
+
+	// Atomically rename the temporary file
+	newFilePath := fmt.Sprintf("../mr-out-%d.txt", taskId)
+	err = os.Rename(tmpFile.Name(), newFilePath)
+	if err != nil {
+		log.Fatalf("Error renaming file: %v", err)
+	}
 }
 
 // send an RPC request to the coordinator, wait for the response.
