@@ -46,39 +46,11 @@ type Coordinator struct {
 	workerAssignments map[int]time.Time
 }
 
-var taskAvailableChan = make(chan TaskInfo, 2)
+var taskAvailableChan = make(chan TaskInfo, 10)
 
 // RPC handlers for the worker to call.
 
-// func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
-// 	c.tasksMx.Lock()
-// 	defer c.tasksMx.Unlock()
-// 	if !c.mapIsDone {
-// 		for id, info := range c.allTasks {
-// 			if info.Status == TaskNotStarted && info.Type == "map" {
-// 				c.AssignMapTask(reply, id, info)
-// 				info.Status = TaskInProgress
-// 				c.allTasks[id] = info
-// 				c.workerAssignments[id] = time.Now()
-// 				return nil
-// 			}
-// 		}
-// 		//Map is not done but all tasks are in progress
-// 		reply.Task = "none"
-// 	} else {
-// 		for id, info := range c.allTasks {
-// 			if info.Status == TaskNotStarted && info.Type == "reduce" {
-// 				c.AssignReduceTask(reply, id, info)
-// 				info.Status = TaskInProgress
-// 				c.allTasks[id] = info
-// 				c.workerAssignments[id] = time.Now()
-// 				return nil
-// 			}
-// 		}
-// 	}
-// 	return nil
-// }
-
+// RPC call for worker to request a task
 func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 	taskInfo := <-taskAvailableChan
 
@@ -97,7 +69,7 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 	return nil
 }
 
-// Assigns a map task to a worker
+// Assigns a map task to a worker by editing the reply
 func (c *Coordinator) AssignTask(reply *GiveTaskReply, id int, info TaskInfo, taskType string) {
 	if info.Type == "map" {
 		reply.File = info.Map.FileName
@@ -112,6 +84,7 @@ func (c *Coordinator) AssignTask(reply *GiveTaskReply, id int, info TaskInfo, ta
 	c.workerAssignments[id] = time.Now()
 }
 
+// RPC Call to mark a task as completed
 func (c *Coordinator) MarkTaskCompleted(args *MarkTaskCompletedArgs, reply *MarkTaskCompletedReply) error {
 	c.tasksMx.Lock()
 	defer c.tasksMx.Unlock()
@@ -147,6 +120,8 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	c.tasksMx.Lock()
+	defer c.tasksMx.Unlock()
 	return c.mapIsDone && c.reduceIsDone
 }
 
