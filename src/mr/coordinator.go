@@ -89,7 +89,7 @@ func (c *Coordinator) GiveTask(args *GiveTaskArgs, reply *GiveTaskReply) error {
 
 	switch taskInfo.Type {
 	case "map":
-		c.AssignTask(reply, taskInfo.TaskId, taskInfo, "map")
+		c.AssignTask(reply, id, taskInfo, "map")
 	case "reduce":
 		c.AssignTask(reply, id, taskInfo, "reduce")
 	}
@@ -167,8 +167,7 @@ func MakeCoordinator(files []string, nReducer int) *Coordinator {
 
 	go c.checkAllTasksAndUpdateQueue()
 	go c.createReduceTasks()
-
-	// go c.checkForWorkerTimeout()
+	go c.checkForWorkerTimeout()
 
 	c.server()
 	return &c
@@ -227,8 +226,29 @@ func (c *Coordinator) createReduceTasks() {
 }
 
 func (c *Coordinator) checkForWorkerTimeout() {
-	c.tasksMx.Lock()
-	defer c.tasksMx.Unlock()
+	for {
+		c.tasksMx.Lock()
+		if c.mapIsDone && c.reduceIsDone {
+			defer c.tasksMx.Unlock()
+			return
+		}
+
+		// Iterate over worker assignments and check for timeouts
+		for taskID, startTime := range c.workerAssignments {
+			if time.Since(startTime).Seconds() > 10 {
+				// Timeout detected, requeue the task and remove assignment
+				info, ok := c.allTasks[taskID]
+				if ok {
+					info.Status = TaskNotStarted
+					c.allTasks[taskID] = info
+				}
+				delete(c.workerAssignments, taskID)
+			}
+		}
+
+		c.tasksMx.Unlock()
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func partitionInputToMapTasks(files []string, c *Coordinator) {
@@ -250,7 +270,7 @@ func checkAllMapTasksComplete(c *Coordinator) {
 	}
 	c.mapIsDone = true
 	close(c.reduceSignal)
-	log.Printf("All map tasks are completed.")
+	// log.Printf("All map tasks are completed.")
 }
 
 func checkAllReduceTasksComplete(c *Coordinator) {
@@ -260,5 +280,5 @@ func checkAllReduceTasksComplete(c *Coordinator) {
 		}
 	}
 	c.reduceIsDone = true
-	log.Printf("All reduce tasks are completed.")
+	// log.Printf("All reduce tasks are completed.")
 }

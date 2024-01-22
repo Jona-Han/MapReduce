@@ -60,15 +60,8 @@ func requestTask() GiveTaskReply {
 
 	ok := call("Coordinator.GiveTask", &args, &reply)
 
-	if ok {
-		switch reply.Task {
-		case "map":
-			log.Printf("Task reply -- Map --Filename: %s\n", reply.File)
-		case "reduce":
-			log.Printf("Task reply -- Reduce --Filename: %v\n", reply.TaskId)
-		}
-	} else {
-		fmt.Printf("RequestTask call failed!\n")
+	if !ok {
+		os.Exit(1)
 	}
 	return reply
 }
@@ -80,7 +73,7 @@ func markTaskComplete(taskId int) {
 	ok := call("Coordinator.MarkTaskCompleted", &args, &reply)
 
 	if !ok {
-		fmt.Printf("MarkTaskComplete call failed!\n")
+		os.Exit(1)
 	}
 }
 
@@ -140,7 +133,7 @@ func writePartitionToFile(taskId int, index int, partition []KeyValue) {
 	}
 
 	// Atomically rename the temporary file
-	newFilePath := fmt.Sprintf("../mr-%d-%d.txt", taskId, index)
+	newFilePath := fmt.Sprintf("./mr-%d-%d", taskId, index)
 	err = os.Rename(tmpFile.Name(), newFilePath)
 	if err != nil {
 		log.Fatalf("Error renaming file: %v", err)
@@ -157,7 +150,7 @@ func readIntermediateFiles(taskID, numPartitions int) []KeyValue {
 	var intermediate []KeyValue
 
 	for partition := 0; partition < numPartitions; partition++ {
-		fileName := fmt.Sprintf("../mr-%d-%d.txt", partition, taskID)
+		fileName := fmt.Sprintf("./mr-%d-%d", partition, taskID)
 		file, err := os.Open(fileName)
 		if err != nil {
 			log.Fatalf(("Error opening intermediate file: %v"), err)
@@ -214,7 +207,7 @@ func reduceAndWriteOutput(intermediate []KeyValue, taskId int, reducef func(stri
 	}
 
 	// Atomically rename the temporary file
-	newFilePath := fmt.Sprintf("../mr-out-%d.txt", taskId)
+	newFilePath := fmt.Sprintf("./mr-out-%d", taskId)
 	err = os.Rename(tmpFile.Name(), newFilePath)
 	if err != nil {
 		log.Fatalf("Error renaming file: %v", err)
@@ -238,6 +231,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	// fmt.Println(err)
 	return false
 }
